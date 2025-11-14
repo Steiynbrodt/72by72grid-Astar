@@ -2,16 +2,25 @@ import pygame
 import heapq
 
 # -----------------------
-# Grid settings
+# Field / Grid / GPS settings
 # -----------------------
 GRID_SIZE = 72
-CELL_SIZE = 12  # GUI pixel size (50 mm irrelevant for rendering)
+CELL_SIZE = 12  # GUI pixel size
+
+# VEX field in mm (approx. -1800 .. +1800)
+FIELD_SIZE_MM = 3600
+FIELD_HALF_MM = FIELD_SIZE_MM / 2
+CELL_MM = 50  # each cell represents 50 mm
+
 WIDTH = GRID_SIZE * CELL_SIZE
 HEIGHT = GRID_SIZE * CELL_SIZE
 
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("A* Pathfinding Interactive Grid")
+pygame.display.set_caption("A* Pathfinding with VEX GPS Mapping")
+
+pygame.font.init()
+font = pygame.font.SysFont(None, 18)
 
 # Colors
 WHITE = (255, 255, 255)
@@ -30,7 +39,34 @@ waypoints = []
 path = []
 
 # -----------------------
-# Helper Functions
+# GPS <-> Grid conversion
+# -----------------------
+def clamp(val, lo, hi):
+    return max(lo, min(hi, val))
+
+def gps_to_grid(x_mm, y_mm):
+    """
+    Convert VEX GPS coordinates (mm, origin center, +Y up)
+    to grid indices (gx, gy) 0..71 with gy downwards.
+    """
+    gx = int((x_mm + FIELD_HALF_MM) // CELL_MM)
+    gy = int((FIELD_HALF_MM - y_mm) // CELL_MM)
+
+    gx = clamp(gx, 0, GRID_SIZE - 1)
+    gy = clamp(gy, 0, GRID_SIZE - 1)
+    return gx, gy
+
+def grid_to_gps(gx, gy):
+    """
+    Convert grid indices (gx, gy) 0..71 to GPS mm coordinates.
+    Returns center of the cell.
+    """
+    x_mm = (gx + 0.5) * CELL_MM - FIELD_HALF_MM
+    y_mm = FIELD_HALF_MM - (gy + 0.5) * CELL_MM
+    return x_mm, y_mm
+
+# -----------------------
+# A* Pathfinding
 # -----------------------
 def heuristic(a, b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
@@ -95,7 +131,7 @@ def compute_total_path():
     path = full_path
 
 # -----------------------
-# Main drawing function
+# Drawing
 # -----------------------
 def draw():
     screen.fill(WHITE)
@@ -128,6 +164,16 @@ def draw():
     for y in range(GRID_SIZE):
         pygame.draw.line(screen, GRAY, (0, y*CELL_SIZE), (WIDTH, y*CELL_SIZE))
 
+    # Mouse position overlay: grid + GPS mm
+    mx, my = pygame.mouse.get_pos()
+    gx = mx // CELL_SIZE
+    gy = my // CELL_SIZE
+    if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
+        x_mm, y_mm = grid_to_gps(gx, gy)
+        text = f"Grid: ({gx},{gy})  GPS: ({int(x_mm)} mm, {int(y_mm)} mm)"
+        surf = font.render(text, True, (0, 0, 0))
+        screen.blit(surf, (5, 5))
+
     pygame.display.flip()
 
 # -----------------------
@@ -141,33 +187,53 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-        if pygame.mouse.get_pressed()[0]:  # Left click
+        # Left click: obstacle or start (with Shift)
+        if pygame.mouse.get_pressed()[0]:
             x, y = pygame.mouse.get_pos()
             gx, gy = x // CELL_SIZE, y // CELL_SIZE
 
-            mods = pygame.key.get_mods()
-            if mods & pygame.KMOD_SHIFT:  # Set start
-                start = (gx, gy)
-                compute_total_path()
-            else:
-                grid[gy][gx] = 1  # obstacle
-                compute_total_path()
+            if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
+                mods = pygame.key.get_mods()
+                if mods & pygame.KMOD_SHIFT:  # Set start
+                    start = (gx, gy)
+                    compute_total_path()
+                else:
+                    grid[gy][gx] = 1  # obstacle
+                    compute_total_path()
 
-        if pygame.mouse.get_pressed()[2]:  # Right click
+        # Right click: remove obstacle or set goal (with Shift)
+        if pygame.mouse.get_pressed()[2]:
             x, y = pygame.mouse.get_pos()
             gx, gy = x // CELL_SIZE, y // CELL_SIZE
-            mods = pygame.key.get_mods()
-            if mods & pygame.KMOD_SHIFT:  # Set goal
-                goal = (gx, gy)
-                compute_total_path()
-            else:
-                grid[gy][gx] = 0  # remove obstacle
-                compute_total_path()
 
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:  # Middle click
+            if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
+                mods = pygame.key.get_mods()
+                if mods & pygame.KMOD_SHIFT:  # Set goal
+                    goal = (gx, gy)
+                    compute_total_path()
+                else:
+                    grid[gy][gx] = 0  # remove obstacle
+                    compute_total_path()
+
+        # Middle click: add waypoint
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
             x, y = event.pos
             gx, gy = x // CELL_SIZE, y // CELL_SIZE
-            waypoints.append((gx, gy))
-            compute_total_path()
+            if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
+                waypoints.append((gx, gy))
+                compute_total_path()
+
+        # Example: press 'G' to print start/goal/waypoints in GPS mm to console
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_g:
+                if start:
+                    sx_mm, sy_mm = grid_to_gps(*start)
+                    print(f"Start GPS: ({sx_mm:.1f} mm, {sy_mm:.1f} mm)")
+                if goal:
+                    gx_mm, gy_mm = grid_to_gps(*goal)
+                    print(f"Goal GPS:  ({gx_mm:.1f} mm, {gy_mm:.1f} mm)")
+                for i, wp in enumerate(waypoints):
+                    wx_mm, wy_mm = grid_to_gps(*wp)
+                    print(f"WP {i} GPS:  ({wx_mm:.1f} mm, {wy_mm:.1f} mm)")
 
 pygame.quit()

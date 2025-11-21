@@ -19,19 +19,19 @@ HEIGHT = GRID_SIZE * CELL_SIZE
 # Robot / inflation parameters (≈30 cm diameter)
 BOT_DIAMETER_MM = 300.0
 BOT_RADIUS_MM = BOT_DIAMETER_MM / 2.0
-SAFETY_MARGIN_MM = 50.0
+SAFETY_MARGIN_MM = 10.0
 # Effective "collision radius"
 COLLISION_RADIUS_MM = BOT_RADIUS_MM + SAFETY_MARGIN_MM  # ≈200 mm
 DEFAULT_INFLATION_RADIUS_MM = COLLISION_RADIUS_MM
 
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("VEX A* Pathfinding – Field + Robot Size")
+pygame.display.set_caption("A* with VEX Field + Robot Size")
 
 pygame.font.init()
 font = pygame.font.SysFont(None, 18)
-small_font = pygame.font.SysFont(None, 16)
 input_font = pygame.font.SysFont(None, 18)
+small_font = pygame.font.SysFont(None, 16)
 
 # Colors
 WHITE = (255, 255, 255)
@@ -43,7 +43,6 @@ RED = (255, 0, 0)
 BLUE = (0, 128, 255)
 YELLOW = (255, 255, 0)
 LIGHT_GRAY = (210, 210, 210)
-INFO_BG = (245, 245, 245)
 
 # Grid structure:
 #   grid[y][x] = 1  -> base obstacle from field geometry or manual
@@ -56,8 +55,7 @@ goal = None
 waypoints = []
 path = []
 
-# GUI toggles
-show_inflated_overlay = True
+show_inflated_overlay = True  # toggle with 'O'
 
 # -----------------------
 # GPS <-> Grid conversion
@@ -166,7 +164,9 @@ def compute_total_path():
         path = []
         return
 
+    # always rebuild inflated obstacles after any grid change
     build_inflated_obstacles()
+
     obstacles = set(inflated_obstacles)
 
     full_path = []
@@ -175,6 +175,7 @@ def compute_total_path():
     for wp in waypoints + [goal]:
         segment = a_star(current, wp, obstacles)
         if not segment:
+            full_path = []
             path = []
             return
         if full_path:
@@ -183,21 +184,6 @@ def compute_total_path():
         current = wp
 
     path = full_path
-
-def clear_path_and_waypoints():
-    global path, waypoints
-    path = []
-    waypoints = []
-
-def reset_field():
-    global grid, path, waypoints, start, goal
-    grid = [[0 for _ in range(GRID_SIZE)] for _ in range(GRID_SIZE)]
-    path = []
-    waypoints = []
-    start = None
-    goal = None
-    add_field_obstacles_with_small_x()
-    build_inflated_obstacles()
 
 # -----------------------
 # Geometry helpers (mm-based)
@@ -326,46 +312,32 @@ def add_field_obstacles_with_small_x():
         add_disk_mm(cx, cy, R)
 
 # -----------------------
+# Info panel text
+# -----------------------
+def draw_info_panel():
+    lines = [
+        "Controls:",
+        "  Left click: add obstacle (or set START with Shift)",
+        "  Right click: remove obstacle (or set GOAL with Shift)",
+        "  Middle click: add waypoint",
+        "  G: print START/GOAL/WP GPS to console",
+        "  O: toggle robot-radius overlay",
+        "",
+        f"Robot collision radius ≈ {int(COLLISION_RADIUS_MM)} mm",
+    ]
+    x0 = 5
+    y0 = 5
+    for i, line in enumerate(lines):
+        surf = small_font.render(line, True, DARK_GRAY)
+        screen.blit(surf, (x0, y0 + i*16))
+
+# -----------------------
 # Drawing
 # -----------------------
 INPUT_BOX_HEIGHT = 24
-input_box_rect = pygame.Rect(5, HEIGHT - INPUT_BOX_HEIGHT - 2, 420, INPUT_BOX_HEIGHT)
+input_box_rect = pygame.Rect(5, HEIGHT - INPUT_BOX_HEIGHT - 2, 380, INPUT_BOX_HEIGHT)
 input_text = ""
 input_active = True
-
-def draw_info_panel():
-    panel_rect = pygame.Rect(5, 5, 420, 90)
-    pygame.draw.rect(screen, INFO_BG, panel_rect)
-    pygame.draw.rect(screen, DARK_GRAY, panel_rect, 1)
-
-    lines = []
-
-    # Start / goal info
-    if start:
-        sx, sy = grid_to_gps(*start)
-        lines.append(f"Start: grid {start}  GPS ({int(sx)} mm, {int(sy)} mm)")
-    else:
-        lines.append("Start: not set")
-
-    if goal:
-        gx, gy = grid_to_gps(*goal)
-        lines.append(f"Goal : grid {goal}  GPS ({int(gx)} mm, {int(gy)} mm)")
-    else:
-        lines.append("Goal : not set")
-
-    lines.append(f"Robot collision radius: {int(COLLISION_RADIUS_MM)} mm")
-
-    # Controls
-    lines.append("LMB: add obstacle   RMB: remove")
-    lines.append("Shift+LMB: set start   Shift+RMB: set goal")
-    lines.append("MMB: add waypoint   C: clear path/WPs   R: reset field")
-    lines.append("B: toggle inflated overlay   G: print GPS   Input: 'x y [r]' + Enter")
-
-    y = panel_rect.y + 4
-    for text in lines:
-        surf = small_font.render(text, True, DARK_GRAY)
-        screen.blit(surf, (panel_rect.x + 4, y))
-        y += 12
 
 def draw():
     screen.fill(WHITE)
@@ -402,8 +374,19 @@ def draw():
     for y in range(GRID_SIZE):
         pygame.draw.line(screen, GRAY, (0, y*CELL_SIZE), (WIDTH, y*CELL_SIZE))
 
-    # Info panel
+    # Info panel (start/goal etc.)
     draw_info_panel()
+
+    # ---- Hover coordinates: grid + GPS mm ----
+    mx, my = pygame.mouse.get_pos()
+    gx = mx // CELL_SIZE
+    gy = my // CELL_SIZE
+    if 0 <= gx < GRID_SIZE and 0 <= gy < GRID_SIZE:
+        x_mm, y_mm = grid_to_gps(gx, gy)
+        hover_text = f"Hover: grid=({gx},{gy})  GPS=({int(x_mm)} mm, {int(y_mm)} mm)"
+        hover_surf = small_font.render(hover_text, True, DARK_GRAY)
+        # place it just above the input label
+        screen.blit(hover_surf, (input_box_rect.x, input_box_rect.y - 36))
 
     # Input label
     label_surf = input_font.render(
@@ -472,9 +455,8 @@ while running:
                     waypoints.append((gx, gy))
                     compute_total_path()
 
-        # Keyboard handling (input field + controls)
+        # Keyboard handling (input field + G print + overlay toggle)
         if event.type == pygame.KEYDOWN:
-            # debug print GPS of start/goal/WPs
             if event.key == pygame.K_g:
                 if start:
                     sx_mm, sy_mm = grid_to_gps(*start)
@@ -486,17 +468,8 @@ while running:
                     wx_mm, wy_mm = grid_to_gps(*wp)
                     print(f"WP {i} GPS:  ({wx_mm:.1f} mm, {wy_mm:.1f} mm)")
 
-            # Clear path + waypoints
-            if event.key == pygame.K_c:
-                clear_path_and_waypoints()
-                build_inflated_obstacles()
-
-            # Reset full field
-            if event.key == pygame.K_r:
-                reset_field()
-
-            # Toggle inflated overlay
-            if event.key == pygame.K_b:
+            # toggle inflated overlay
+            if event.key == pygame.K_o:
                 show_inflated_overlay = not show_inflated_overlay
 
             # Text input for obstacle inflation
